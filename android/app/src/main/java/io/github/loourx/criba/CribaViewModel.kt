@@ -16,6 +16,7 @@ import io.github.loourx.criba.data.MediaRepo
 import io.github.loourx.criba.data.Mode
 import io.github.loourx.criba.data.Mover
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -80,16 +81,23 @@ class CribaViewModel(app: Application) : AndroidViewModel(app) {
         reload()
     }
 
+    private var loadJob: Job? = null
+
+    /** Lee todo de nuevo. Si ya se está leyendo, no lanza una segunda lectura a la vez. */
     fun reload() {
+        if (loadJob?.isActive == true) return
         loading = true
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             val loaded = withContext(Dispatchers.IO) {
-                decisions.load()
-                mover.reconcile()
-                forgetVanished()
-                MediaRepo.load(getApplication())
+                runCatching {
+                    decisions.load()
+                    mover.reconcile()
+                    forgetVanished()
+                    MediaRepo.load(getApplication())
+                }
             }
-            items = loaded
+            loaded.onSuccess { items = it }.onFailure { message = "No se pudo leer el almacenamiento: ${it.message}" }
+            decisions.writeError?.let { message = it }
             dirty = false
             loading = false
             refreshStats()
@@ -123,8 +131,9 @@ class CribaViewModel(app: Application) : AndroidViewModel(app) {
                 for ((id, d) in decisions.entries()) {
                     val a = d.applied
                     if (a != null) { moved++; movedBytes += a.size; continue }
+                    val itemSize = bySize[id] ?: continue // solo lo que existe ahora
                     val (n, b) = counts[d.choice] ?: (0 to 0L)
-                    counts[d.choice] = (n + 1) to (b + (bySize[id] ?: 0L))
+                    counts[d.choice] = (n + 1) to (b + itemSize)
                 }
                 Stats(albums, counts, moved to movedBytes)
             }
@@ -364,6 +373,7 @@ class CribaViewModel(app: Application) : AndroidViewModel(app) {
             }
             withContext(Dispatchers.IO) { mover.scan(changed) }
             progress = ApplyProgress(done, list.size, errors.toList(), false)
+            decisions.writeError?.let { message = it }
             dirty = true
             refreshEmptyCount()
         }

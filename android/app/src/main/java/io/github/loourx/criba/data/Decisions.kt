@@ -22,8 +22,16 @@ class Decisions(context: Context) {
     private val map = ConcurrentHashMap<String, Decision>()
     private val writer = Executors.newSingleThreadExecutor()
 
-    /** Lee el diario. Llamar fuera del hilo principal. */
+    /** Último error de escritura (por ejemplo, sin espacio), para avisar al usuario. */
+    @Volatile var writeError: String? = null
+        private set
+
+    /** Lee el diario en el hilo de escritura, para que no se cruce con escrituras pendientes. */
     fun load() {
+        writer.submit { loadNow() }.get()
+    }
+
+    private fun loadNow() {
         map.clear()
         if (!file.exists()) return
         var lines = 0
@@ -42,7 +50,9 @@ class Decisions(context: Context) {
                 // línea incompleta o dañada: se salta
             }
         }
-        if (lines > map.size * 2 + 200) compact()
+        if (lines > map.size * 2 + 200) {
+            try { compact() } catch (e: Exception) { writeError = "No se pudo ordenar el archivo de decisiones." }
+        }
     }
 
     fun get(id: String): Decision? = map[id]
@@ -61,10 +71,13 @@ class Decisions(context: Context) {
                 lines += JSONObject().put("id", id).put("c", choice.name).toString()
             }
         }
-        if (lines.isNotEmpty()) writer.execute { append(lines) }
+        if (lines.isNotEmpty()) writer.execute { safeAppend(lines) }
     }
 
-    /** Apunta que un archivo se movió. Vuelve cuando está escrito en disco. */
+    /**
+     * Apunta que un archivo se movió. Vuelve cuando está escrito en disco.
+     * Lanza una excepción si no se pudo escribir (por ejemplo, sin espacio).
+     */
     fun markApplied(id: String, choice: Choice, applied: Applied) {
         map[id] = Decision(choice, applied)
         val line = JSONObject().put("id", id).put("c", choice.name).put("a", appliedJson(applied)).toString()
@@ -80,7 +93,7 @@ class Decisions(context: Context) {
     fun forget(id: String) {
         if (map.remove(id) != null) {
             val line = JSONObject().put("id", id).put("x", true).toString()
-            writer.submit { append(listOf(line)) }.get()
+            writer.submit { safeAppend(listOf(line)) }.get()
         }
     }
 
@@ -89,6 +102,14 @@ class Decisions(context: Context) {
 
     private fun append(lines: List<String>) {
         file.appendText(lines.joinToString("\n", postfix = "\n"))
+    }
+
+    private fun safeAppend(lines: List<String>) {
+        try {
+            append(lines)
+        } catch (e: Exception) {
+            writeError = "No se pudieron guardar las decisiones. ¿Está el móvil sin espacio?"
+        }
     }
 
     /** Reescribe el diario solo con el estado actual (al cargar, si ha crecido mucho). */

@@ -420,7 +420,7 @@ private fun InterludeView(vm: CribaViewModel) {
 @Composable
 private fun RecapScreen(vm: CribaViewModel) {
     @Suppress("UNUSED_EXPRESSION") vm.version
-    BackHandler(enabled = !vm.running) { vm.leaveRecap() }
+    BackHandler { if (!vm.running) vm.leaveRecap() } // mientras se mueve, "atrás" no hace nada
     val list = vm.recapItems
     val progress = vm.progress
     var armed by remember { mutableStateOf(false) }

@@ -49,8 +49,13 @@ class Mover(private val context: Context, private val decisions: Decisions) {
         val root = rootOf(item.path) ?: return Result.failure(IllegalStateException("No se reconoce el almacenamiento."))
         val folder = File("$root/$dirName/${safeFolder(item.album)}")
         val dst = moveNoOverwrite(item.id, src, folder).getOrElse { return Result.failure(it) }
-        decisions.markApplied(item.id, choice,
-            Applied(src.absolutePath, dst.absolutePath, System.currentTimeMillis(), item.size))
+        try {
+            decisions.markApplied(item.id, choice,
+                Applied(src.absolutePath, dst.absolutePath, System.currentTimeMillis(), item.size))
+        } catch (e: Exception) {
+            // El archivo ya se movió y el diario lo tiene apuntado: al reabrir la app se recupera.
+            return Result.failure(IllegalStateException("Movido, pero no se pudo apuntar. ¿Móvil sin espacio?"))
+        }
         writeJournal(item.id, "fin", src.absolutePath, dst.absolutePath)
         return Result.success(src.absolutePath to dst.absolutePath)
     }
@@ -62,7 +67,12 @@ class Mover(private val context: Context, private val decisions: Decisions) {
         if (!now.exists()) return Result.failure(IllegalStateException("Ya no está en la carpeta de revisión."))
         val original = File(applied.before)
         val parent = original.parentFile ?: return Result.failure(IllegalStateException("Ruta original no válida."))
+        val parentExisted = parent.isDirectory
         val back = moveNoOverwrite(id, now, parent, preferredName = original.name).getOrElse { return Result.failure(it) }
+        // Si la carpeta de WhatsApp ya no existía, se recrea oculta a la galería como estaba.
+        if (!parentExisted && WA_HIDDEN.containsMatchIn(parent.absolutePath)) {
+            runCatching { File(parent, ".nomedia").createNewFile() }
+        }
         decisions.forget(id)
         writeJournal(id, "devuelto", now.absolutePath, back.absolutePath)
         return Result.success(now.absolutePath to back.absolutePath)
@@ -98,6 +108,14 @@ class Mover(private val context: Context, private val decisions: Decisions) {
      * Lo que no sabe resolver lo deja en el diario, no lo borra.
      */
     fun reconcile() {
+        try {
+            reconcileNow()
+        } catch (e: Exception) {
+            // Sin espacio u otro error de disco: el diario se queda como está y se reintenta al reabrir.
+        }
+    }
+
+    private fun reconcileNow() {
         if (!journal.exists()) return
         val open = LinkedHashMap<String, JSONObject>()
         journal.forEachLine { line ->
@@ -116,10 +134,12 @@ class Mover(private val context: Context, private val decisions: Decisions) {
                 dst.exists() && !src.exists() -> {
                     val d = decisions.get(id)
                     when {
+                        d?.applied != null && d.applied.now == dst.absolutePath -> Unit // ya apuntado
                         d?.applied != null && d.applied.now == src.absolutePath -> decisions.forget(id) // devolución hecha
                         d?.applied == null -> {
                             // Movimiento hecho pero sin apuntar: la carpeta de destino dice qué era.
-                            val choice = if (dst.absolutePath.contains("/${MediaRepo.ASIDE_DIR}/")) Choice.SET_ASIDE else Choice.DELETE
+                            val choice = d?.choice?.takeIf { it == Choice.DELETE || it == Choice.SET_ASIDE }
+                                ?: if (ASIDE_ROOT.containsMatchIn(dst.absolutePath)) Choice.SET_ASIDE else Choice.DELETE
                             decisions.markApplied(id, choice, Applied(src.absolutePath, dst.absolutePath,
                                 System.currentTimeMillis(), dst.length()))
                         }
@@ -137,10 +157,12 @@ class Mover(private val context: Context, private val decisions: Decisions) {
 
     @Synchronized
     private fun writeJournal(id: String, step: String, from: String, to: String) {
-        journal.appendText(
-            JSONObject().put("id", id).put("paso", step).put("de", from).put("a", to)
-                .put("t", System.currentTimeMillis()).toString() + "\n"
-        )
+        runCatching {
+            journal.appendText(
+                JSONObject().put("id", id).put("paso", step).put("de", from).put("a", to)
+                    .put("t", System.currentTimeMillis()).toString() + "\n"
+            )
+        }
     }
 
     /** Avisa a la galería de los cambios, por partes, y espera a que termine. */
@@ -196,13 +218,16 @@ class Mover(private val context: Context, private val decisions: Decisions) {
     }
 
     companion object {
+        private val ASIDE_ROOT = Regex("^/storage/(emulated/[0-9]+|[^/]+)/" + MediaRepo.ASIDE_DIR + "/")
+        private val WA_HIDDEN = Regex("/WhatsApp( Business)?/Media/WhatsApp (Video|Images)/(Sent|Private)$")
+
         /** Nombre de carpeta seguro a partir del nombre del álbum. */
         fun safeFolder(album: String): String {
             var s = album.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trimStart('.', ' ').trim()
             if (s.isEmpty()) s = "Sin álbum"
-            // Cortar por caracteres completos (no partir un emoji).
-            if (s.codePointCount(0, s.length) > 80) s = s.substring(0, s.offsetByCodePoints(0, 80))
-            return s
+            // Como mucho 120 bytes (el sistema admite 255) y sin partir un carácter por la mitad.
+            while (s.toByteArray(Charsets.UTF_8).size > 120) s = s.substring(0, s.offsetByCodePoints(0, s.codePointCount(0, s.length) - 1))
+            return s.trimEnd('.', ' ').ifEmpty { "Sin álbum" }
         }
     }
 }

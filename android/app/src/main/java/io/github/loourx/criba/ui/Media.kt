@@ -129,8 +129,13 @@ private suspend fun loadSystemThumb(context: Context, item: Item): Bitmap? =
         if (cont.isActive) cont.resume(bmp)
     }
 
-private fun photoRequest(context: Context, item: Item) =
-    ImageRequest.Builder(context).data(File(item.path)).memoryCacheKey("f:" + item.path).build()
+/** Siempre al tamaño de la pantalla: nunca se decodifica una foto de 48 MP entera. */
+private fun photoRequest(context: Context, item: Item): ImageRequest {
+    val dm = context.resources.displayMetrics
+    return ImageRequest.Builder(context).data(File(item.path))
+        .size(dm.widthPixels, dm.heightPixels)
+        .memoryCacheKey("f:" + item.path).build()
+}
 
 /** Foto a pantalla completa. Coil la reduce al tamaño de la pantalla (no carga los 48 MP). */
 @Composable
@@ -171,10 +176,11 @@ fun rememberPlayer(): ExoPlayer {
     }
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
+        var wasPlaying = false
         val obs = LifecycleEventObserver { _, e ->
             when (e) {
-                Lifecycle.Event.ON_STOP -> player.pause()
-                Lifecycle.Event.ON_START -> if (player.mediaItemCount > 0) player.play()
+                Lifecycle.Event.ON_STOP -> { wasPlaying = player.isPlaying; player.pause() }
+                Lifecycle.Event.ON_START -> if (wasPlaying) player.play()
                 else -> Unit
             }
         }

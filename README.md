@@ -2,9 +2,30 @@
 
 Revisa las fotos y vídeos de tu móvil Android desde el PC, uno a uno, y decide con el teclado qué se queda. Pensado para cuando el móvil está lleno y la galería no ayuda a limpiar.
 
-No borra nada del móvil. Lo que descartas se mueve a una carpeta del propio móvil y lo borras tú cuando lo hayas revisado.
+No borra nada por su cuenta. Lo que descartas se mueve a una carpeta del propio móvil y lo borras tú cuando lo hayas revisado.
 
-## Requisitos
+Hay dos versiones con el mismo funcionamiento:
+
+- **En el móvil**: una app Android, sin PC ni cable. [Ir a la sección](#en-el-móvil-sin-pc).
+- **En el PC**: una página en el navegador conectada al móvil por USB. Es lo que explica el resto de este README.
+
+## En el móvil (sin PC)
+
+1. Descarga `criba.apk` desde [Releases](../../releases/latest) en el propio móvil.
+2. Ábrela y permite instalar apps de esa fuente cuando Android lo pida. Play Protect puede avisar porque la app pide acceso a todos los archivos; es lo esperado.
+3. Al abrir Criba, pulsa **Dar acceso** y activa "Permitir acceso para gestionar todos los archivos".
+
+Funciona en Android 11 o superior. No tiene acceso a internet.
+
+Revisa deslizando (← borrar, → conservar, ↑ apartar) o con los botones. Lo descartado se mueve a `Criba_para_borrar/<álbum>/` y lo apartado a `Criba_apartado/<álbum>/`, siempre en el mismo almacenamiento que el original (memoria interna o tarjeta SD). Desde la pantalla de inicio puedes ver lo decidido sin mover, devolver lo movido a su sitio y **vaciar** `Criba_para_borrar`: Android te enseña la lista y eres tú quien confirma. Ese borrado es definitivo y no pasa por la papelera de la galería.
+
+Los privados de WhatsApp se ven en la galería mientras estén en esas carpetas.
+
+Para compilarla: `cd android && ./gradlew assembleRelease` (JDK 17 y Android SDK).
+
+## En el PC
+
+### Requisitos
 
 - Windows 10 u 11
 - Python 3.10 o superior ([python.org](https://www.python.org/downloads/), marca "Add python.exe to PATH")
@@ -13,7 +34,7 @@ No borra nada del móvil. Lo que descartas se mueve a una carpeta del propio mó
 
 No hace falta instalar nada más: si falta `adb`, el lanzador lo instala con winget.
 
-## Uso
+### Uso
 
 1. En el móvil, activa las opciones de desarrollador (Ajustes → Acerca del teléfono → pulsa 7 veces en "Número de compilación", o en "Versión de MIUI" en Xiaomi) y dentro activa **Depuración USB**.
 2. Conecta el móvil y abre `Abrir Criba.bat`.
@@ -34,7 +55,7 @@ No hace falta instalar nada más: si falta `adb`, el lanzador lo instala con win
 
 Al terminar cada álbum ves un resumen. En el repaso confirmas y entonces se mueven los archivos.
 
-## Dónde acaba cada cosa
+### Dónde acaba cada cosa
 
 | Decisión | En el móvil | En el PC |
 |---|---|---|
@@ -45,18 +66,18 @@ Los archivos de "Guardar en el PC" solo se mueven en el móvil después de copia
 
 Para borrar de verdad, abre esas carpetas desde el Explorador (hay botones en la página) o desde la galería del móvil y bórralas.
 
-## Modos
+### Modos
 
 - **Vídeos más pesados**: lo que más espacio libera con menos decisiones.
 - **Todo, de mayor a menor** y **Todo por fecha**.
 - **Un álbum**: eliges el álbum en la tabla.
 - **WhatsApp: enviados y privados**: WhatsApp oculta estas carpetas a la galería y suelen ocupar varios GB.
 
-## Privacidad
+### Privacidad
 
 Todo funciona en tu PC. El servidor solo escucha en `127.0.0.1` y no se conecta a internet. Las decisiones y el inventario se guardan en la carpeta `criba/` y no se suben a ningún sitio.
 
-## Problemas frecuentes
+### Problemas frecuentes
 
 - **El vídeo no se reproduce**: algunos vídeos HEVC (H.265) no se ven en todos los navegadores. Puedes decidir igualmente por nombre y tamaño.
 - **El móvil no aparece en el Explorador**: en el aviso USB del móvil elige "Transferencia de archivos". El botón "Abrir Criba_para_borrar" intenta activarlo solo.
