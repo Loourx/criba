@@ -6,3 +6,12 @@ criba/cache/
 criba/*.tmp
 __pycache__/
 platform-tools/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.p12
+*.jks
+*.keystore

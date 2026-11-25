@@ -1,0 +1,78 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+    tags: ["v*"]
+  pull_request:
+    paths: ["android/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Clave de firma
+        env:
+          KEYSTORE_B64: ${{ secrets.CRIBA_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.CRIBA_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/criba.p12"
+            echo "CRIBA_KEYSTORE_FILE=$RUNNER_TEMP/criba.p12" >> "$GITHUB_ENV"
+            echo "CRIBA_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "Sin clave de release: se firma con la de depuración."
+          fi
+
+      - name: Versión
+        run: |
+          echo "CRIBA_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "CRIBA_VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Lint y compilación
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon lintRelease assembleRelease
+
+      - name: Renombrar APK
+        run: cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/criba.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: criba-apk
+          path: ${{ runner.temp }}/criba.apk
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: lint
+          path: android/app/build/reports/lint-results-release.html
+
+      - name: Borrar la clave del runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/criba.p12"
+
+      - name: Publicar release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/criba.apk
