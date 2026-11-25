@@ -3,6 +3,7 @@ package io.github.loourx.criba
 import android.app.Application
 import android.net.Uri
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -34,15 +35,15 @@ class CribaViewModel(app: Application) : AndroidViewModel(app) {
 
     var loading by mutableStateOf(true); private set
     var items by mutableStateOf<List<Item>>(emptyList()); private set
-    var version by mutableStateOf(0); private set // cambia cada vez que cambia una decisión
+    var version by mutableIntStateOf(0); private set // cambia cada vez que cambia una decisión
 
     var screen by mutableStateOf(Screen.START); private set
     var mode by mutableStateOf(Mode.HEAVY_VIDEOS)
     var album by mutableStateOf<String?>(null)
-    var batchSize by mutableStateOf(50)
+    var batchSize by mutableIntStateOf(50)
 
     var batch by mutableStateOf<List<Item>>(emptyList()); private set
-    var index by mutableStateOf(0); private set
+    var index by mutableIntStateOf(0); private set
     var interlude by mutableStateOf<Interlude?>(null); private set
     var recapAlbum by mutableStateOf<String?>(null); private set
     var recapTab by mutableStateOf(Choice.DELETE)

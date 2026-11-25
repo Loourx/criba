@@ -69,12 +69,10 @@ fun Thumb(item: Item, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     if (item.mediaUri != null) {
         val bmp by produceState(Images.systemThumbs.get(item.id), item.id) {
-            if (value == null) {
-                value = withContext(Images.thumbDispatcher) {
-                    runCatching {
-                        context.contentResolver.loadThumbnail(Uri.parse(item.mediaUri), Size(320, 320), null)
-                    }.getOrNull()?.also { Images.systemThumbs.put(item.id, it) }
-                }
+            value = value ?: withContext(Images.thumbDispatcher) {
+                runCatching {
+                    context.contentResolver.loadThumbnail(Uri.parse(item.mediaUri), Size(320, 320), null)
+                }.getOrNull()?.also { Images.systemThumbs.put(item.id, it) }
             }
         }
         Box(modifier.background(Panel)) {
