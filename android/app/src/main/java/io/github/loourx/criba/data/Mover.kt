@@ -4,11 +4,13 @@ import android.content.ContentUris
 import android.content.Context
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.storage.StorageManager
 import android.provider.MediaStore
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import kotlin.coroutines.resume
 
@@ -21,92 +23,119 @@ import kotlin.coroutines.resume
 class Mover(private val context: Context, private val decisions: Decisions) {
 
     private val journal = File(context.filesDir, "diario.jsonl")
+    private val storage = context.getSystemService(StorageManager::class.java)
 
-    /** Mueve [item] a la carpeta de revisión que le toca. Devuelve la ruta nueva o un error legible. */
-    suspend fun apply(item: Item, choice: Choice): Result<String> {
+    /** Raíces de los almacenamientos montados (memoria interna y tarjetas SD). */
+    fun roots(): List<String> =
+        storage.storageVolumes.mapNotNull { it.directory?.absolutePath }.distinct()
+
+    /** Raíz del almacenamiento donde está [path], según Android. */
+    private fun rootOf(path: String): String? =
+        runCatching { storage.getStorageVolume(File(path))?.directory?.absolutePath }.getOrNull()
+
+    /**
+     * Mueve [item] a la carpeta de revisión que le toca. No avisa a la galería: quien llama
+     * junta las rutas y llama a [scan] una vez al final. Devuelve (ruta vieja, ruta nueva).
+     */
+    fun apply(item: Item, choice: Choice): Result<Pair<String, String>> {
         val dirName = when (choice) {
             Choice.DELETE -> MediaRepo.DELETE_DIR
             Choice.SET_ASIDE -> MediaRepo.ASIDE_DIR
-            else -> return Result.failure(IllegalArgumentException("Nada que mover"))
+            else -> return Result.failure(IllegalArgumentException("Nada que mover."))
         }
         val src = File(item.path)
         if (!src.exists()) return Result.failure(IllegalStateException("El archivo ya no está en el móvil."))
-        // Mismo almacenamiento que el original: mover entre memoria interna y tarjeta SD no es posible sin copiar.
-        val folder = File("${MediaRepo.volumeRoot(item.path)}/$dirName/${safeFolder(item.album)}")
+        // Mismo almacenamiento que el original: mover entre memoria interna y tarjeta SD exigiría copiar.
+        val root = rootOf(item.path) ?: return Result.failure(IllegalStateException("No se reconoce el almacenamiento."))
+        val folder = File("$root/$dirName/${safeFolder(item.album)}")
         val dst = moveNoOverwrite(item.id, src, folder).getOrElse { return Result.failure(it) }
-        decisions.markApplied(item.id, Applied(src.absolutePath, dst.absolutePath, System.currentTimeMillis()))
+        decisions.markApplied(item.id, choice,
+            Applied(src.absolutePath, dst.absolutePath, System.currentTimeMillis(), item.size))
         writeJournal(item.id, "fin", src.absolutePath, dst.absolutePath)
-        scan(listOf(src.absolutePath, dst.absolutePath))
-        return Result.success(dst.absolutePath)
+        return Result.success(src.absolutePath to dst.absolutePath)
     }
 
-    /** Devuelve un archivo movido a su carpeta original, sin pisar nada que haya allí ahora. */
-    suspend fun restore(id: String): Result<String> {
+    /** Devuelve un archivo movido a su carpeta original, sin pisar nada. Devuelve (vieja, nueva). */
+    fun restore(id: String): Result<Pair<String, String>> {
         val applied = decisions.get(id)?.applied ?: return Result.failure(IllegalStateException("No estaba movido."))
         val now = File(applied.now)
         if (!now.exists()) return Result.failure(IllegalStateException("Ya no está en la carpeta de revisión."))
         val original = File(applied.before)
-        val back = moveNoOverwrite(id, now, original.parentFile ?: return Result.failure(IllegalStateException("Ruta original no válida.")),
-            preferredName = original.name).getOrElse { return Result.failure(it) }
+        val parent = original.parentFile ?: return Result.failure(IllegalStateException("Ruta original no válida."))
+        val back = moveNoOverwrite(id, now, parent, preferredName = original.name).getOrElse { return Result.failure(it) }
         decisions.forget(id)
         writeJournal(id, "devuelto", now.absolutePath, back.absolutePath)
-        scan(listOf(now.absolutePath, back.absolutePath))
-        return Result.success(back.absolutePath)
+        return Result.success(now.absolutePath to back.absolutePath)
     }
 
     private fun moveNoOverwrite(id: String, src: File, folder: File, preferredName: String = src.name): Result<File> {
         if (!folder.isDirectory && !folder.mkdirs()) {
             return Result.failure(IllegalStateException("No se pudo crear la carpeta ${folder.name}."))
         }
-        val base = preferredName.substringBeforeLast('.', preferredName)
-        val ext = preferredName.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
-        var n = 0
-        while (n < 1000) {
+        val dot = preferredName.lastIndexOf('.')
+        val base = if (dot > 0) preferredName.substring(0, dot) else preferredName
+        val ext = if (dot > 0) preferredName.substring(dot) else ""
+        for (n in 0 until 1000) {
             val dst = File(folder, if (n == 0) preferredName else "$base ($n)$ext")
-            n++
             if (dst.exists()) continue
             writeJournal(id, "inicio", src.absolutePath, dst.absolutePath)
-            return try {
+            try {
                 // Sin REPLACE_EXISTING: si alguien creó el archivo justo ahora, falla en vez de pisarlo.
                 Files.move(src.toPath(), dst.toPath())
-                Result.success(dst)
-            } catch (e: java.nio.file.FileAlreadyExistsException) {
+                return Result.success(dst)
+            } catch (e: FileAlreadyExistsException) {
                 continue
             } catch (e: Exception) {
-                Result.failure(IllegalStateException("El móvil no dejó mover el archivo (${e.javaClass.simpleName})."))
+                writeJournal(id, "fallo", src.absolutePath, dst.absolutePath)
+                return Result.failure(IllegalStateException("El móvil no dejó mover el archivo (${e.javaClass.simpleName})."))
             }
         }
         return Result.failure(IllegalStateException("Demasiados archivos con el mismo nombre."))
     }
 
-    /** Al abrir la app: termina de apuntar los movimientos que quedaron a medias. */
+    /**
+     * Al abrir la app: termina de apuntar los movimientos que quedaron a medias.
+     * Lo que no sabe resolver lo deja en el diario, no lo borra.
+     */
     fun reconcile() {
         if (!journal.exists()) return
         val open = LinkedHashMap<String, JSONObject>()
         journal.forEachLine { line ->
             val o = runCatching { JSONObject(line) }.getOrNull() ?: return@forEachLine
             val id = o.optString("id")
-            when (o.optString("paso")) {
-                "inicio" -> open[id] = o
-                else -> open.remove(id)
-            }
+            if (o.optString("paso") == "inicio") open[id] = o else open.remove(id)
         }
+        val unresolved = ArrayList<String>()
+        val toScan = ArrayList<String>()
         for ((id, o) in open) {
             val src = File(o.getString("de"))
             val dst = File(o.getString("a"))
-            if (dst.exists() && !src.exists()) {
-                val d = decisions.get(id)
-                if (d != null && d.applied == null) {
-                    decisions.markApplied(id, Applied(src.absolutePath, dst.absolutePath, System.currentTimeMillis()))
-                } else if (d?.applied != null && d.applied.now == src.absolutePath) {
-                    decisions.forget(id) // era una devolución que llegó a hacerse
+            when {
+                // no llegó a moverse: no hay nada que apuntar
+                src.exists() && !dst.exists() -> Unit
+                dst.exists() && !src.exists() -> {
+                    val d = decisions.get(id)
+                    when {
+                        d?.applied != null && d.applied.now == src.absolutePath -> decisions.forget(id) // devolución hecha
+                        d?.applied == null -> {
+                            // Movimiento hecho pero sin apuntar: la carpeta de destino dice qué era.
+                            val choice = if (dst.absolutePath.contains("/${MediaRepo.ASIDE_DIR}/")) Choice.SET_ASIDE else Choice.DELETE
+                            decisions.markApplied(id, choice, Applied(src.absolutePath, dst.absolutePath,
+                                System.currentTimeMillis(), dst.length()))
+                        }
+                        else -> unresolved += o.toString()
+                    }
+                    toScan += src.absolutePath; toScan += dst.absolutePath
                 }
-                MediaScannerConnection.scanFile(context, arrayOf(src.absolutePath, dst.absolutePath), null, null)
+                else -> unresolved += o.toString()
             }
         }
-        journal.delete()
+        if (toScan.isNotEmpty()) MediaScannerConnection.scanFile(context, toScan.toTypedArray(), null, null)
+        if (unresolved.isEmpty()) journal.delete()
+        else journal.writeText(unresolved.joinToString("\n", postfix = "\n"))
     }
 
+    @Synchronized
     private fun writeJournal(id: String, step: String, from: String, to: String) {
         journal.appendText(
             JSONObject().put("id", id).put("paso", step).put("de", from).put("a", to)
@@ -114,30 +143,27 @@ class Mover(private val context: Context, private val decisions: Decisions) {
         )
     }
 
-    /** Avisa a la galería de los cambios y espera a que termine (como mucho 20 s). */
+    /** Avisa a la galería de los cambios, por partes, y espera a que termine. */
     suspend fun scan(paths: List<String>) {
-        if (paths.isEmpty()) return
-        withTimeoutOrNull(20_000) {
-            suspendCancellableCoroutine { cont ->
-                var left = paths.size
-                MediaScannerConnection.scanFile(context, paths.toTypedArray(), null) { _, _ ->
-                    synchronized(this@Mover) {
-                        left--
-                        if (left == 0 && cont.isActive) cont.resume(Unit)
+        for (chunk in paths.distinct().chunked(300)) {
+            withTimeoutOrNull(10_000L + chunk.size * 100L) {
+                suspendCancellableCoroutine { cont ->
+                    var left = chunk.size
+                    val lock = Any()
+                    MediaScannerConnection.scanFile(context, chunk.toTypedArray(), null) { _, _ ->
+                        synchronized(lock) {
+                            left--
+                            if (left == 0 && cont.isActive) cont.resume(Unit)
+                        }
                     }
                 }
             }
         }
     }
 
-    /** Todos los archivos que hay ahora en Criba_para_borrar (memoria interna y tarjetas SD). */
-    fun filesToEmpty(): List<File> {
-        val roots = (listOf(MediaRepo.PRIMARY_ROOT) + (File("/storage").listFiles()
-            ?.filter { it.isDirectory && it.name != "emulated" && it.name != "self" }
-            ?.map { it.absolutePath } ?: emptyList())).distinct()
-        return roots.flatMap { root ->
-            File("$root/${MediaRepo.DELETE_DIR}").walkTopDown().filter { it.isFile }.toList()
-        }
+    /** Todos los archivos que hay ahora en Criba_para_borrar, en la raíz de cada almacenamiento. */
+    fun filesToEmpty(): List<File> = roots().flatMap { root ->
+        File("$root/${MediaRepo.DELETE_DIR}").walkTopDown().filter { it.isFile }.toList()
     }
 
     /**
@@ -146,27 +172,24 @@ class Mover(private val context: Context, private val decisions: Decisions) {
      * del sistema; la app no borra nada por su cuenta.
      */
     suspend fun urisToEmpty(): List<Uri> {
-        val files = filesToEmpty()
-        scan(files.map { it.absolutePath })
+        scan(filesToEmpty().map { it.absolutePath })
         val uris = ArrayList<Uri>()
-        val projection = arrayOf(
-            MediaStore.Files.FileColumns._ID,
-            MediaStore.Files.FileColumns.MEDIA_TYPE,
-            MediaStore.Files.FileColumns.VOLUME_NAME,
-        )
+        val type = MediaStore.Files.FileColumns.MEDIA_TYPE
+        val projection = arrayOf(MediaStore.Files.FileColumns._ID, type, MediaStore.Files.FileColumns.VOLUME_NAME)
         val selection = "${MediaStore.Files.FileColumns.DATA} LIKE ? ESCAPE '\\' AND " +
-            "(${MediaStore.Files.FileColumns.MEDIA_TYPE}=${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE} OR " +
-            "${MediaStore.Files.FileColumns.MEDIA_TYPE}=${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
-        context.contentResolver.query(
-            MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL), projection, selection,
-            arrayOf("%/${MediaRepo.likeEscape(MediaRepo.DELETE_DIR)}/%"), null
-        )?.use { c ->
-            while (c.moveToNext()) {
-                val id = c.getLong(0)
-                val volume = c.getString(2) ?: MediaStore.VOLUME_EXTERNAL_PRIMARY
-                val collection = if (c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)
-                    MediaStore.Video.Media.getContentUri(volume) else MediaStore.Images.Media.getContentUri(volume)
-                uris += ContentUris.withAppendedId(collection, id)
+            "($type=${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE} OR $type=${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
+        for (root in roots()) {
+            // Solo <raíz>/Criba_para_borrar/…, nunca otra carpeta que se llame igual más adentro.
+            val pattern = MediaRepo.likeEscape("$root/${MediaRepo.DELETE_DIR}/") + "%"
+            context.contentResolver.query(
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL), projection, selection, arrayOf(pattern), null
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val volume = c.getString(2) ?: MediaStore.VOLUME_EXTERNAL_PRIMARY
+                    val collection = if (c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)
+                        MediaStore.Video.Media.getContentUri(volume) else MediaStore.Images.Media.getContentUri(volume)
+                    uris += ContentUris.withAppendedId(collection, c.getLong(0))
+                }
             }
         }
         return uris
@@ -175,9 +198,11 @@ class Mover(private val context: Context, private val decisions: Decisions) {
     companion object {
         /** Nombre de carpeta seguro a partir del nombre del álbum. */
         fun safeFolder(album: String): String {
-            var s = album.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trim().trimStart('.')
-            if (s.isEmpty() || s == "." || s == "..") s = "Sin álbum"
-            return s.take(80)
+            var s = album.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trimStart('.', ' ').trim()
+            if (s.isEmpty()) s = "Sin álbum"
+            // Cortar por caracteres completos (no partir un emoji).
+            if (s.codePointCount(0, s.length) > 80) s = s.substring(0, s.offsetByCodePoints(0, 80))
+            return s
         }
     }
 }

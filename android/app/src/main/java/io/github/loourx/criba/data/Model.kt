@@ -38,7 +38,7 @@ enum class Mode(val title: String, val hint: String) {
 }
 
 /** Una decisión ya aplicada: el archivo se movió de [before] a [now]. */
-data class Applied(val before: String, val now: String, val atMs: Long)
+data class Applied(val before: String, val now: String, val atMs: Long, val size: Long)
 
 data class Decision(val choice: Choice, val applied: Applied? = null)
 

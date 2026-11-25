@@ -32,7 +32,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -47,7 +46,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,12 +61,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.loourx.criba.CribaViewModel
+import io.github.loourx.criba.RecapSource
 import io.github.loourx.criba.Screen
 import io.github.loourx.criba.data.Choice
 import io.github.loourx.criba.data.Item
 import io.github.loourx.criba.data.MediaRepo
 import io.github.loourx.criba.data.Mode
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -122,26 +120,21 @@ fun CribaApp(vm: CribaViewModel) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StartScreen(vm: CribaViewModel) {
-    @Suppress("UNUSED_EXPRESSION") vm.version // repinta al cambiar decisiones
-    val totals = vm.totals()
+    val totals = vm.stats.counts
     var confirmEmpty by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val pending = remember { mutableStateOf<List<List<android.net.Uri>>>(emptyList()) }
     val context = LocalContext.current
 
+    // Android pide confirmación para cada lote; al responder se lanza el siguiente.
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
-        val rest = pending.value.drop(1)
-        if (r.resultCode == Activity.RESULT_OK && rest.isNotEmpty()) {
-            pending.value = rest
-            // siguiente lote
-            val req = MediaStore.createDeleteRequest(context.contentResolver, rest.first())
-            launcherRef.value?.invoke(IntentSenderRequest.Builder(req.intentSender).build())
-        } else {
-            pending.value = emptyList()
-            vm.afterEmpty(cancelled = r.resultCode != Activity.RESULT_OK)
+        vm.onDeleteResult(r.resultCode == Activity.RESULT_OK)
+    }
+    val nextChunk = vm.deleteQueue.firstOrNull()
+    LaunchedEffect(nextChunk) {
+        if (nextChunk != null) {
+            val req = MediaStore.createDeleteRequest(context.contentResolver, nextChunk)
+            launcher.launch(IntentSenderRequest.Builder(req.intentSender).build())
         }
     }
-    launcherRef.value = { launcher.launch(it) }
 
     LazyColumn(
         Modifier.fillMaxSize().safeDrawingPadding(),
@@ -170,6 +163,15 @@ private fun StartScreen(vm: CribaViewModel) {
                 Text("Cómo se borra", fontWeight = FontWeight.Bold)
                 Text("Lo que marcas para borrar se mueve a ${MediaRepo.DELETE_DIR}. Lo apartado va a ${MediaRepo.ASIDE_DIR}, para copiarlo luego al PC o a la nube. Las dos carpetas salen como álbumes en la galería.",
                     color = Muted, fontSize = 13.sp)
+                val pendingCount = (totals[Choice.DELETE]?.first ?: 0) + (totals[Choice.SET_ASIDE]?.first ?: 0)
+                if (pendingCount > 0) {
+                    OutlinedButton(onClick = { vm.openPending() }) { Text("Decidido sin mover: $pendingCount") }
+                }
+                if (vm.stats.moved.first > 0) {
+                    OutlinedButton(onClick = { vm.openMoved() }) {
+                        Text("Ver lo movido (${vm.stats.moved.first}) y devolver")
+                    }
+                }
                 if (n > 0) {
                     Button(onClick = { confirmEmpty = true }, colors = ButtonDefaults.buttonColors(containerColor = Del)) {
                         Text("Vaciar ${MediaRepo.DELETE_DIR} ($n · ${fmtBytes(b)})")
@@ -203,7 +205,7 @@ private fun StartScreen(vm: CribaViewModel) {
             ) { Text(if (vm.mode == Mode.ALBUM && vm.album == null) "Elige un álbum abajo" else "Empezar tanda") }
         }
         item { Text("Álbumes", fontWeight = FontWeight.Bold) }
-        items(vm.albums(), key = { it.name }) { a ->
+        items(vm.stats.albums, key = { it.name }) { a ->
             Row(
                 Modifier.fillMaxWidth()
                     .background(if (vm.album == a.name && vm.mode == Mode.ALBUM) Panel else Color.Transparent, RoundedCornerShape(6.dp))
@@ -223,27 +225,20 @@ private fun StartScreen(vm: CribaViewModel) {
             onDismissRequest = { confirmEmpty = false },
             title = { Text("Vaciar ${MediaRepo.DELETE_DIR}") },
             text = {
-                Text("Android te enseñará la lista y te pedirá confirmar. Lo que borres desaparece para siempre: " +
-                    "no pasa por la papelera de la galería. Si hay muchos archivos, te lo pedirá por partes.")
+                val (n, b) = vm.toEmpty
+                Text("Hay $n archivos (${fmtBytes(b)}) en ${MediaRepo.DELETE_DIR}. Android te enseñará la lista y te pedirá confirmar. " +
+                    "Lo que borres desaparece para siempre: no pasa por la papelera de la galería. Si son muchos, te lo pedirá por partes.")
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirmEmpty = false
-                    scope.launch {
-                        val uris = vm.urisToEmpty()
-                        if (uris.isEmpty()) { vm.afterEmpty(cancelled = false); return@launch }
-                        pending.value = uris.chunked(400)
-                        val req = MediaStore.createDeleteRequest(context.contentResolver, pending.value.first())
-                        launcher.launch(IntentSenderRequest.Builder(req.intentSender).build())
-                    }
+                    vm.startEmpty()
                 }) { Text("Continuar", color = Del) }
             },
             dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text("Cancelar") } },
         )
     }
 }
-
-private val launcherRef = mutableStateOf<((IntentSenderRequest) -> Unit)?>(null)
 
 @Composable
 private fun Selectable(selected: Boolean, onClick: () -> Unit, compact: Boolean = false, content: @Composable () -> Unit) {
@@ -260,13 +255,16 @@ private fun Selectable(selected: Boolean, onClick: () -> Unit, compact: Boolean 
 
 @Composable
 private fun ReviewScreen(vm: CribaViewModel) {
-    @Suppress("UNUSED_EXPRESSION") vm.version
+    @Suppress("UNUSED_EXPRESSION") vm.version // repinta al cambiar decisiones
     BackHandler { vm.backToStart() }
     val item = vm.current
     val interlude = vm.interlude
     var muted by remember { mutableStateOf(true) }
-    var playerError by remember { mutableStateOf(false) }
+    var playerError by remember(item?.id) { mutableStateOf(false) }
     val player = rememberPlayer()
+    val context = LocalContext.current
+    LaunchedEffect(interlude, item?.isVideo) { if (interlude != null || item?.isVideo != true) player.pause() }
+    LaunchedEffect(vm.index) { prefetchPhotos(context, vm.batch.drop(vm.index + 1).take(2)) }
 
     Column(Modifier.fillMaxSize().safeDrawingPadding()) {
         // barra superior
@@ -289,16 +287,14 @@ private fun ReviewScreen(vm: CribaViewModel) {
                     onUp = { vm.decide(Choice.SET_ASIDE) },
                     onTap = { if (item.isVideo) { if (player.isPlaying) player.pause() else player.play() } },
                 ) {
-                    if (item.isVideo) {
-                        if (playerError) {
-                            Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("Este vídeo no se puede reproducir aquí.", color = Muted)
-                                Text("Puedes decidir por el nombre y el tamaño.", color = Muted, fontSize = 13.sp)
-                            }
+                    if (item.isVideo && playerError) {
+                        Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Este vídeo no se puede reproducir aquí.", color = Muted)
+                            Text("Puedes decidir por el nombre y el tamaño.", color = Muted, fontSize = 13.sp)
                         }
-                        Video(item, player, muted, onError = { playerError = it }, modifier = Modifier.fillMaxSize())
+                    } else if (item.isVideo) {
+                        Video(item, player, muted, onError = { playerError = true }, modifier = Modifier.fillMaxSize())
                     } else {
-                        LaunchedEffect(item.id) { player.pause() }
                         Photo(item, Modifier.fillMaxSize())
                     }
                 }
@@ -339,7 +335,6 @@ private fun SwipeArea(
     val threshold = with(density) { 80.dp.toPx() }
     BoxWithConstraints(
         Modifier.fillMaxSize()
-            .systemGestureExclusion()
             .pointerInput(key) {
                 var start = Offset.Zero
                 var total = Offset.Zero
@@ -425,8 +420,8 @@ private fun InterludeView(vm: CribaViewModel) {
 @Composable
 private fun RecapScreen(vm: CribaViewModel) {
     @Suppress("UNUSED_EXPRESSION") vm.version
-    BackHandler { vm.leaveRecap() }
-    val list = vm.recapList()
+    BackHandler(enabled = !vm.running) { vm.leaveRecap() }
+    val list = vm.recapItems
     val progress = vm.progress
     var armed by remember { mutableStateOf(false) }
     val view = LocalView.current
@@ -436,7 +431,14 @@ private fun RecapScreen(vm: CribaViewModel) {
     }
 
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Repaso" + (vm.recapAlbum?.let { " de “$it”" } ?: " de la tanda"), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text(
+            when (vm.recapSource) {
+                RecapSource.PENDING -> "Decidido sin mover"
+                RecapSource.MOVED -> "Ya movido"
+                RecapSource.BATCH -> "Repaso" + (vm.recapAlbum?.let { " de “$it”" } ?: " de la tanda")
+            },
+            fontSize = 20.sp, fontWeight = FontWeight.Bold,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(Choice.DELETE, Choice.SET_ASIDE, Choice.KEEP).forEach { c ->
                 val n = list.count { vm.choiceOf(it.id) == c }
@@ -508,6 +510,7 @@ private fun RecapScreen(vm: CribaViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { vm.leaveRecap() }, enabled = progress?.running != true, modifier = Modifier.weight(1f)) {
                 Text(when {
+                    vm.recapSource != RecapSource.BATCH -> "Volver al inicio"
                     vm.recapAlbum != null && vm.interlude?.next != null -> "Seguir con “${vm.interlude?.next}”"
                     vm.index < vm.batch.size -> "Volver a la revisión"
                     else -> "Terminar"

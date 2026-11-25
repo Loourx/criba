@@ -4,6 +4,8 @@ import android.content.ContentUris
 import android.content.Context
 import android.provider.MediaStore
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
 /** Lee la lista de fotos y vídeos. Solo lectura: aquí no se toca ningún archivo. */
@@ -11,6 +13,7 @@ object MediaRepo {
 
     const val DELETE_DIR = "Criba_para_borrar"
     const val ASIDE_DIR = "Criba_apartado"
+    const val PRIMARY_ROOT = "/storage/emulated/0"
 
     private val PHOTO_EXT = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif")
     private val VIDEO_EXT = setOf("mp4", "3gp", "mov", "mkv", "webm")
@@ -28,18 +31,13 @@ object MediaRepo {
         "WhatsApp Images/Private" to "WhatsApp · fotos privadas",
     )
 
-    const val PRIMARY_ROOT = "/storage/emulated/0"
+    /** Solo las carpetas de revisión de la raíz de cada almacenamiento, no otras con el mismo nombre. */
+    private val CRIBA_ROOT_DIR =
+        Regex("^/storage/(emulated/[0-9]+|[^/]+)/(" + DELETE_DIR + "|" + ASIDE_DIR + ")/")
 
-    /** Raíz del almacenamiento donde está [path]: memoria interna o tarjeta SD. */
-    fun volumeRoot(path: String): String {
-        if (path.startsWith("$PRIMARY_ROOT/")) return PRIMARY_ROOT
-        val parts = path.split('/')
-        // /storage/XXXX-XXXX/...
-        return if (parts.size > 3 && parts[1] == "storage") "/storage/${parts[2]}" else PRIMARY_ROOT
-    }
+    fun isInCribaDir(path: String): Boolean = CRIBA_ROOT_DIR.containsMatchIn(path)
 
-    fun isInCribaDir(path: String): Boolean =
-        path.contains("/$DELETE_DIR/") || path.contains("/$ASIDE_DIR/")
+    fun isVideoName(name: String) = name.substringAfterLast('.', "").lowercase() in VIDEO_EXT
 
     fun load(context: Context): List<Item> {
         val out = ArrayList<Item>(40_000)
@@ -66,13 +64,11 @@ object MediaRepo {
             MediaStore.Files.FileColumns.MEDIA_TYPE,
             MediaStore.Files.FileColumns.VOLUME_NAME,
         )
-        val selection = "(${MediaStore.Files.FileColumns.MEDIA_TYPE}=${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE}" +
-            " OR ${MediaStore.Files.FileColumns.MEDIA_TYPE}=${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})" +
-            " AND ${MediaStore.Files.FileColumns.DATA} NOT LIKE ? ESCAPE '\\'" +
-            " AND ${MediaStore.Files.FileColumns.DATA} NOT LIKE ? ESCAPE '\\'"
-        val args = arrayOf("%/${likeEscape(DELETE_DIR)}/%", "%/${likeEscape(ASIDE_DIR)}/%")
+        val type = MediaStore.Files.FileColumns.MEDIA_TYPE
+        val selection = "($type=${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE} OR " +
+            "$type=${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
 
-        context.contentResolver.query(uri, projection, selection, args, null)?.use { c ->
+        context.contentResolver.query(uri, projection, selection, null, null)?.use { c ->
             val iId = c.getColumnIndexOrThrow(projection[0])
             val iData = c.getColumnIndexOrThrow(projection[1])
             val iName = c.getColumnIndexOrThrow(projection[2])
@@ -120,13 +116,16 @@ object MediaRepo {
     private fun listWhatsApp(out: MutableList<Item>, seen: MutableSet<String>) {
         for (base in WA_BASES) {
             for ((dir, album) in WA_DIRS) {
-                val folder = File("$PRIMARY_ROOT/$base/$dir")
-                val files = folder.listFiles() ?: continue
+                val files = File("$PRIMARY_ROOT/$base/$dir").listFiles() ?: continue
                 for (f in files) {
-                    if (!f.isFile) continue
                     val ext = f.extension.lowercase()
                     val isVideo = ext in VIDEO_EXT
                     if (!isVideo && ext !in PHOTO_EXT) continue
+                    // Una sola llamada al sistema por archivo para tipo, tamaño y fecha.
+                    val attrs = runCatching {
+                        Files.readAttributes(f.toPath(), BasicFileAttributes::class.java)
+                    }.getOrNull() ?: continue
+                    if (!attrs.isRegularFile) continue
                     val path = f.absolutePath
                     if (!seen.add(path)) continue
                     out += Item(
@@ -136,8 +135,8 @@ object MediaRepo {
                         album = album,
                         isVideo = isVideo,
                         mime = if (isVideo) "video/$ext" else "image/$ext",
-                        size = f.length(),
-                        dateMs = f.lastModified(),
+                        size = attrs.size(),
+                        dateMs = attrs.lastModifiedTime().toMillis(),
                         durationMs = 0,
                         width = 0,
                         height = 0,
@@ -149,8 +148,31 @@ object MediaRepo {
         }
     }
 
+    /** Construye un elemento a partir de un archivo ya movido (para poder devolverlo). */
+    fun itemFromFile(id: String, path: String): Item? {
+        val f = File(path)
+        if (!f.isFile) return null
+        val isVideo = isVideoName(f.name)
+        return Item(
+            id = id, path = path, name = f.name, album = f.parentFile?.name ?: "",
+            isVideo = isVideo, mime = if (isVideo) "video/*" else "image/*", size = f.length(),
+            dateMs = f.lastModified(), durationMs = 0, width = 0, height = 0,
+            whatsapp = false, mediaUri = null,
+        )
+    }
+
     fun likeEscape(s: String): String = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-    private fun sha1(s: String): String =
-        MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+    private val HEX = "0123456789abcdef".toCharArray()
+
+    private fun sha1(s: String): String {
+        val d = MessageDigest.getInstance("SHA-1").digest(s.toByteArray())
+        val out = CharArray(d.size * 2)
+        for (i in d.indices) {
+            val v = d[i].toInt() and 0xff
+            out[i * 2] = HEX[v ushr 4]
+            out[i * 2 + 1] = HEX[v and 0x0f]
+        }
+        return String(out)
+    }
 }
