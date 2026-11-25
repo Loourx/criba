@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Criba de galería</title>
+<style>
+:root{
+  --bg:#0f1312; --panel:#161b19; --line:#28302d; --fg:#e8edea; --muted:#8e9994;
+  --accent:#5fb3d0; --keep:#4cc07f; --del:#f07164; --pc:#b59cf0; --warn:#e0a640;
+  --f-ui:"Segoe UI Variable","Segoe UI",system-ui,sans-serif; --f-mono:"Cascadia Mono",Consolas,ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-ui)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--f-mono);font-size:12px}
+.muted{color:var(--muted)}
+[hidden]{display:none!important}
+kbd{font-family:var(--f-mono);background:var(--line);border-radius:4px;padding:1px 7px;font-size:12px}
+
+/* inicio */
+#start{max-width:980px;margin:0 auto;padding:32px 20px;display:flex;flex-direction:column;gap:20px}
+#start h1{margin:0;font-size:26px}
+.modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.mode{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;text-align:left;display:flex;flex-direction:column;gap:4px}
+.mode[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.mode b{font-size:15px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+select{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit}
+.go{background:var(--accent);color:#06161d;border:0;border-radius:6px;padding:10px 18px;font-weight:600}
+.ghost{background:transparent;border:1px solid var(--line);border-radius:6px;padding:9px 14px}
+.tablewrap{overflow:auto;max-height:46vh;border:1px solid var(--line);border-radius:8px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:7px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-weight:500;font-size:12px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--f-mono);font-size:12px}
+tr.pick{cursor:pointer}tr.pick:hover td{background:#1b2220}
+tr.sel td{background:#173039}
+.sum{display:flex;gap:18px;flex-wrap:wrap}
+.export{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.export .mono{overflow-wrap:anywhere;flex:1;min-width:0}
+
+/* revisión */
+#review{height:100%;display:grid;grid-template-rows:auto 4px 1fr auto}
+.bar{display:flex;justify-content:space-between;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);align-items:center;flex-wrap:wrap}
+.bar .album{font-weight:700;font-size:16px}
+.prog{background:var(--line)}.prog i{display:block;height:100%;background:var(--accent);width:0}
+.stage{display:grid;grid-template-columns:1fr 280px;min-height:0}
+.view{position:relative;display:flex;align-items:center;justify-content:center;min-height:0;padding:12px;overflow:hidden}
+.view img,.view video{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px}
+.flash{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .18s}
+.flash.k{background:radial-gradient(circle,transparent 55%,rgba(76,192,127,.35))}
+.flash.d{background:radial-gradient(circle,transparent 55%,rgba(240,113,100,.4))}
+.flash.p{background:radial-gradient(circle,transparent 55%,rgba(181,156,240,.4))}
+.flash.on{opacity:1;transition:none}
+.msg{max-width:420px;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+.loading{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);font-size:12px;color:var(--muted)}
+.side{border-left:1px solid var(--line);padding:14px;display:flex;flex-direction:column;gap:14px;overflow:auto}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:0;font-size:12px}
+dt{color:var(--muted)}dd{margin:0;font-family:var(--f-mono);overflow-wrap:anywhere}
+.tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--line)}
+.tag.keep{color:var(--keep);border-color:var(--keep)}.tag.delete{color:var(--del);border-color:var(--del)}
+.tag.pc{color:var(--pc);border-color:var(--pc)}.tag.skip{color:var(--warn);border-color:var(--warn)}
+.tally{display:flex;flex-direction:column;gap:4px;margin-top:auto;font-size:13px}
+.tally b{font-family:var(--f-mono)}
+.keys{display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--line)}
+.key{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:transparent}
+.key.del{border-color:var(--del);color:var(--del)}.key.keep{border-color:var(--keep);color:var(--keep)}.key.pc{border-color:var(--pc);color:var(--pc)}
+.cache{font-size:12px}
+.seek{position:absolute;left:24px;right:24px;bottom:14px;height:22px;display:flex;align-items:center;gap:10px;cursor:pointer}
+.seek .track{flex:1;height:4px;background:rgba(255,255,255,.18);border-radius:2px;position:relative}
+.seek .track i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:2px;width:0}
+.seek .time{font-family:var(--f-mono);font-size:12px;color:var(--fg);background:rgba(0,0,0,.5);padding:1px 6px;border-radius:4px}
+.paused-badge{position:absolute;top:18px;left:50%;transform:translateX(-50%);font-size:12px;background:rgba(0,0,0,.6);padding:2px 10px;border-radius:999px}
+.tile video{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+.tile .meta{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.8));font-size:11px;padding:14px 6px 4px;text-align:left;color:#fff;font-family:var(--f-mono)}
+.tile .st{position:absolute;top:4px;left:4px;border-radius:4px;font-size:11px;padding:0 6px;background:#0f1312;color:var(--fg);border:1px solid var(--line)}
+.tile.done{opacity:.55}
+.apply{display:flex;flex-direction:column;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
+.danger{background:var(--del);color:#1a0705;border:0;border-radius:6px;padding:10px 18px;font-weight:600}
+.folders{display:grid;gap:6px;font-size:13px}
+
+/* fin de álbum */
+.interlude{position:absolute;inset:0;background:rgba(15,19,18,.94);display:flex;align-items:center;justify-content:center;padding:20px}
+.interlude .box{max-width:460px;display:flex;flex-direction:column;gap:12px;text-align:center}
+.interlude h2{margin:0;font-size:20px}
+.interlude .counts{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;font-family:var(--f-mono);font-size:13px}
+
+/* repaso */
+#recap{max-width:1200px;margin:0 auto;padding:24px 20px;display:flex;flex-direction:column;gap:16px}
+#recap h2{margin:0}
+.tabs{display:flex;gap:8px;flex-wrap:wrap}
+.tab{border:1px solid var(--line);border-radius:999px;padding:5px 14px;background:transparent}
+.tab[aria-selected="true"]{background:var(--panel);border-color:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.tile{position:relative;aspect-ratio:1;border-radius:6px;overflow:hidden;background:var(--panel);border:2px solid var(--line);padding:0}
+.tile.delete{border-color:var(--del)}.tile.pc{border-color:var(--pc)}.tile.keep{border-color:var(--keep)}
+.tile img{width:100%;height:100%;object-fit:cover;display:block}
+.tile .vid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:12px;color:var(--muted);padding:6px;text-align:center}
+.tile .x{position:absolute;top:4px;right:4px;border-radius:4px;font-size:11px;padding:0 6px;color:#0f1312}
+.tile.delete .x{background:var(--del)}.tile.pc .x{background:var(--pc)}.tile.keep .x{background:var(--keep)}
+.empty{color:var(--muted);padding:30px 0}
+.note{border-left:3px solid var(--warn);padding:8px 12px;background:var(--panel)}
+@media (max-width:760px){.stage{grid-template-columns:1fr}.side{border-left:0;border-top:1px solid var(--line)}}
+@media (prefers-reduced-motion:reduce){.flash{transition:none}}
+</style>
+</head>
+<body>
+
+<section id="start">
+  <div>
+    <h1>Criba de galería</h1>
+    <p class="muted" style="margin:4px 0 0">Decide con el teclado qué conservar. Nada se borra del móvil: lo descartado se mueve a una carpeta para que lo borres tú.</p>
+  </div>
+  <div class="sum mono" id="sum"></div>
+  <div class="export">
+    <span>Lo que guardes en el PC va a</span>
+    <span class="mono" id="exportDir"></span>
+    <button class="ghost" id="openExport" type="button">Abrir carpeta</button>
+  </div>
+  <div class="apply">
+    <b>Cómo se borra</b>
+    <div class="folders muted">
+      <span><b style="color:var(--del)">Borrar</b>: al confirmar en el repaso, el archivo se mueve dentro del móvil a <span class="mono">Criba_para_borrar/&lt;álbum&gt;</span>. Lo revisas y lo borras tú.</span>
+      <span><b style="color:var(--pc)">Guardar en PC</b>: se copia aquí y se comprueba byte a byte; después se mueve en el móvil a <span class="mono">Criba_ya_en_PC/&lt;álbum&gt;</span> para que lo borres tú.</span>
+      <span>Para llegar a esas carpetas: Explorador → Este equipo → (tu móvil) → Almacenamiento interno compartido.</span>
+    </div>
+    <div class="row">
+      <button class="ghost phoneBtn" data-f="Criba_para_borrar" type="button" style="border-color:var(--del)">Abrir Criba_para_borrar</button>
+      <button class="ghost phoneBtn" data-f="Criba_ya_en_PC" type="button" style="border-color:var(--pc)">Abrir Criba_ya_en_PC</button>
+      <span class="muted phoneMsg"></span>
+    </div>
+  </div>
+  <div class="modes" role="group" aria-label="Qué revisar">
+    <button class="mode" data-mode="pesados" aria-pressed="true" type="button"><b>Vídeos más pesados</b><span class="muted">Lo que más espacio libera por decisión.</span></button>
+    <button class="mode" data-mode="grandes" aria-pressed="false" type="button"><b>Todo, de mayor a menor</b><span class="muted">Fotos y vídeos ordenados por tamaño.</span></button>
+    <button class="mode" data-mode="album" aria-pressed="false" type="button"><b>Un álbum</b><span class="muted">Elige uno en la tabla de abajo.</span></button>
+    <button class="mode" data-mode="fecha" aria-pressed="false" type="button"><b>Todo por fecha</b><span class="muted">De lo más antiguo a lo más nuevo.</span></button>
+    <button class="mode" data-mode="whatsapp" aria-pressed="false" type="button"><b>WhatsApp: enviados y privados</b><span class="muted">Lo que la galería no enseña. De mayor a menor.</span></button>
+  </div>
+  <div class="row">
+    <label for="size">Tamaño de la tanda</label>
+    <select id="size"><option>20</option><option selected>50</option><option>200</option><option>500</option></select>
+    <span class="muted" id="albumPicked"></span>
+    <button class="go" id="go" type="button">Empezar tanda</button>
+  </div>
+  <p class="muted" style="margin:0">La tanda se ordena por álbumes: al terminar o saltar un álbum ves su resumen antes de pasar al siguiente.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Álbum</th><th class="n">Archivos</th><th class="n">Ocupa</th><th class="n">Vídeos</th><th class="n">Sin revisar</th></tr></thead>
+      <tbody id="albums"></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="review" hidden>
+  <div class="bar">
+    <span class="album" id="rAlbum"></span>
+    <span class="mono muted" id="rCount"></span>
+  </div>
+  <div class="prog"><i id="rProg"></i></div>
+  <div class="stage">
+    <div class="view" id="view">
+      <div class="flash" id="flash"></div>
+      <div class="interlude" id="interlude" hidden>
+        <div class="box">
+          <h2 id="iTitle"></h2>
+          <div class="counts" id="iCounts"></div>
+          <div class="row" style="justify-content:center">
+            <button class="go" id="iNext" type="button"></button>
+            <button class="ghost" id="iRecap" type="button"><kbd>R</kbd> Repaso de este álbum</button>
+          </div>
+          <span class="muted" style="font-size:12px"><kbd>Z</kbd> deshace la última decisión</span>
+        </div>
+      </div>
+    </div>
+    <aside class="side">
+      <div id="rState"></div>
+      <dl id="meta"></dl>
+      <div class="tally">
+        <span>Conservar <b style="color:var(--keep)" id="tKeep">0</b></span>
+        <span>Guardar en PC <b style="color:var(--pc)" id="tPc">0</b> · <span id="tPcGb">0 MB</span></span>
+        <span>Borrar <b style="color:var(--del)" id="tDel">0</b> · <span id="tDelGb">0 MB</span></span>
+        <span class="muted" id="tAlbumLeft"></span>
+        <span class="cache muted" id="cache"></span>
+      </div>
+    </aside>
+  </div>
+  <div class="keys">
+    <button class="key del" data-k="n" type="button"><kbd>N</kbd>Borrar</button>
+    <button class="key keep" data-k="s" type="button"><kbd>S</kbd>Conservar</button>
+    <button class="key pc" data-k="p" type="button"><kbd>P</kbd>Guardar en PC</button>
+    <button class="key" data-k="a" type="button"><kbd>A</kbd>Saltar álbum</button>
+    <button class="key" data-k="z" type="button"><kbd>Z</kbd>Deshacer</button>
+    <button class="key" data-k=" " type="button"><kbd>Espacio</kbd>Pausa</button>
+    <span class="key muted" style="border-style:dashed"><kbd>← →</kbd>±5 s</span>
+    <button class="key" data-k="m" type="button"><kbd>M</kbd><span id="mLabel">Activar sonido</span></button>
+    <button class="key" data-k="escape" type="button"><kbd>Esc</kbd>Repaso de la tanda</button>
+  </div>
+</section>
+
+<section id="recap" hidden>
+  <h2 id="recapTitle"></h2>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-t="delete" type="button"></button>
+    <button class="tab" role="tab" data-t="pc" type="button"></button>
+    <button class="tab" role="tab" data-t="keep" type="button"></button>
+  </div>
+  <p class="muted" style="margin:0" id="recapHint"></p>
+  <div class="grid" id="grid"></div>
+  <div class="apply" id="applyBox">
+    <b id="applyTitle"></b>
+    <span class="muted" id="applyText"></span>
+    <div class="row"><button class="danger" id="applyBtn" type="button"></button><button class="ghost" id="applyCancel" type="button" hidden>Cancelar</button><span class="mono" id="applyProg"></span></div>
+  </div>
+  <div class="row">
+    <button class="go" id="recapGo" type="button"></button>
+    <button class="ghost" id="again" type="button">Otra tanda</button>
+    <button class="ghost" id="openExport2" type="button">Abrir carpeta del PC</button>
+    <button class="ghost phoneBtn" data-f="Criba_para_borrar" type="button" style="border-color:var(--del)">Abrir Criba_para_borrar</button>
+    <button class="ghost phoneBtn" data-f="Criba_ya_en_PC" type="button" style="border-color:var(--pc)">Abrir Criba_ya_en_PC</button>
+    <span class="muted phoneMsg"></span>
+  </div>
+</section>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmtB = b => b >= 1e9 ? (b/1e9).toFixed(2).replace('.',',')+' GB' : Math.round(b/1e6).toLocaleString('es')+' MB';
+const fmtD = ms => ms ? new Date(ms).toLocaleString('es',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+const fmtDur = ms => { if(!ms) return ''; const s=Math.round(ms/1000); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
+const LABEL = {keep:'Conservar', delete:'Borrar', pc:'Guardar en PC', skip:'Saltado'};
+let mode='pesados', album='', items=[], idx=0, dec={}, history=[], muted=true, view='start';
+let interlude=null, recapScope=null, recapTab='delete';
+try { muted = localStorage.getItem('criba-muted') !== '0'; } catch(e) {}
+
+async function api(p, body, timeoutMs=15000){
+  const ctl = new AbortController(); const t = setTimeout(()=>ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(p, Object.assign({signal:ctl.signal}, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {}));
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+/* miniaturas de vídeo: se cargan de 2 en 2, se captura un fotograma y la conexión se cierra.
+   Se guardan, así que redibujar el repaso no vuelve a pedir nada al móvil. */
+const thumbs = new Map(), thumbQueue = []; let thumbBusy = 0;
+function thumbFor(it, imgEl){
+  if (thumbs.has(it.id)) { imgEl.src = thumbs.get(it.id); return; }
+  if (!thumbQueue.some(q=>q.id===it.id)) thumbQueue.push(it);
+  pumpThumbs();
+}
+function pumpThumbs(){
+  while (thumbBusy < 2 && thumbQueue.length){
+    const it = thumbQueue.shift(); if (thumbs.has(it.id)) continue;
+    thumbBusy++;
+    const v = document.createElement('video'); v.muted = true; v.preload = 'auto';
+    let finished = false;
+    const done = (url) => {
+      if (finished) return; finished = true;
+      thumbs.set(it.id, url || '');
+      v.removeAttribute('src'); v.load();
+      document.querySelectorAll(`img[data-thumb="${it.id}"]`).forEach(i=>{ if (url) i.src = url; });
+      thumbBusy--; pumpThumbs();
+    };
+    v.addEventListener('loadeddata', () => { v.currentTime = Math.min(1, (v.duration||2)/2); }, {once:true});
+    v.addEventListener('seeked', () => {
+      try { const c=document.createElement('canvas'); const s=240/Math.max(v.videoWidth,v.videoHeight,1);
+        c.width=Math.round(v.videoWidth*s); c.height=Math.round(v.videoHeight*s);
+        c.getContext('2d').drawImage(v,0,0,c.width,c.height); done(c.toDataURL('image/jpeg',.7)); }
+      catch(e){ done(''); }
+    }, {once:true});
+    v.addEventListener('error', () => done(''), {once:true});
+    setTimeout(() => done(''), 15000);
+    v.src = media(it);
+  }
+}
+function show(v){ if (v==='recap') setTimeout(pollApply, 0); view=v; for (const id of ['start','review','recap']) $('#'+id).hidden = id!==v; if (v!=='review') stopVideo(); }
+function stopVideo(){ const vid=$('#view video'); if (vid){ vid.pause(); vid.removeAttribute('src'); vid.load(); vid.remove(); } }
+
+async function loadAlbums(){
+  const d = await api('/api/albums');
+  const s = d.summary;
+  $('#exportDir').textContent = d.export_dir;
+  $('#sum').innerHTML = `<span style="color:var(--keep)">Conservar: ${s.keep[0]}</span><span style="color:var(--pc)">Guardados en PC: ${s.pc_ok}/${s.pc[0]} · ${fmtB(s.pc[1])}</span><span style="color:var(--del)">Para borrar: ${s.delete[0]} · ${fmtB(s.delete[1])}</span><span class="muted">Saltados: ${s.skip[0]}</span><span style="color:var(--accent)">Movidos a revisión: ${s.freed[0]} · ${fmtB(s.freed[1])}</span>`;
+  const tb = $('#albums'); tb.innerHTML='';
+  for (const a of d.albums){
+    const tr = document.createElement('tr'); tr.className='pick'+(a.album===album?' sel':'');
+    tr.innerHTML = `<td></td><td class="n">${a.n.toLocaleString('es')}</td><td class="n">${fmtB(a.bytes)}</td><td class="n">${a.videos}</td><td class="n">${a.pending.toLocaleString('es')}</td>`;
+    tr.firstChild.textContent = a.album;
+    tr.onclick = () => { album=a.album; setMode('album'); loadAlbums(); };
+    tb.appendChild(tr);
+  }
+}
+function setMode(m){
+  mode=m;
+  document.querySelectorAll('.mode').forEach(b=>b.setAttribute('aria-pressed', b.dataset.mode===m));
+  $('#albumPicked').textContent = m==='album' ? (album ? 'Álbum: '+album : 'Elige un álbum en la tabla') : '';
+}
+document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+for (const id of ['#openExport','#openExport2']) $(id).onclick = () => api('/api/open-export',{});
+document.querySelectorAll('.phoneBtn').forEach(b=>b.onclick=async()=>{
+  const msgs=document.querySelectorAll('.phoneMsg');
+  msgs.forEach(m=>m.textContent='Abriendo… (si hace falta, activo la transferencia de archivos)');
+  try { const r=await api('/api/open-phone',{folder:b.dataset.f}); msgs.forEach(m=>m.textContent=r.msg); }
+  catch(e){ msgs.forEach(m=>m.textContent='No se pudo contactar con el servidor.'); }
+});
+
+$('#go').onclick = async () => {
+  if (mode==='album' && !album) return;
+  const q = new URLSearchParams({mode, album, size:$('#size').value});
+  const d = await api('/api/batch?'+q);
+  items = d.items; idx=0; dec={}; history=[]; interlude=null; applyState={}; applyArmed=false;
+  if (!items.length){ $('#albumPicked').textContent='No queda nada sin revisar aquí.'; return; }
+  show('review'); render();
+};
+
+const media = it => '/media/'+it.id;
+let preloaded = new Map();
+function preloadPhotos(){
+  for (let j=idx+1; j<=idx+4 && j<items.length; j++){
+    const it=items[j];
+    if (it.type==='foto' && !preloaded.has(it.id)){ const im=new Image(); im.src=media(it); preloaded.set(it.id, im); }
+  }
+  if (preloaded.size>40) preloaded = new Map([...preloaded].slice(-20));
+}
+
+function counts(list){
+  const c={keep:[0,0],delete:[0,0],pc:[0,0],skip:[0,0]};
+  for (const it of list){ const d=dec[it.id]; if (d){ c[d][0]++; c[d][1]+=it.size; } }
+  return c;
+}
+
+function render(){
+  $('#interlude').hidden = !interlude;
+  if (interlude) return renderInterlude();
+  if (idx>=items.length){ return openRecap(null); }
+  const it = items[idx];
+  api('/api/position',{pos:idx});
+  $('#rAlbum').textContent = it.album;
+  $('#rCount').textContent = `${idx+1} / ${items.length}`;
+  $('#rProg').style.width = (idx/items.length*100)+'%';
+  stopVideo();
+  const v = $('#view'); v.querySelectorAll('img,.msg,.loading,.seek,.paused-badge').forEach(e=>e.remove());
+  let el;
+  if (it.type==='video'){
+    el = document.createElement('video'); el.src=media(it); el.autoplay=true; el.loop=true; el.muted=muted; el.controls=false; el.playsInline=true;
+    el.tabIndex=-1; el.preload='auto';
+    const ld=document.createElement('div'); ld.className='loading'; ld.textContent='Cargando del móvil…'; v.appendChild(ld);
+    el.addEventListener('canplay', ()=>ld.remove(), {once:true});
+    el.onerror = () => fail(it, 'Este vídeo no se puede reproducir en el navegador (seguramente es HEVC). Puedes decidir por el nombre y el tamaño.');
+    el.onclick = () => { el.paused ? el.play() : el.pause(); };
+    const sk=document.createElement('div'); sk.className='seek'; sk.innerHTML='<div class="track"><i></i></div><span class="time"></span>';
+    const pb=document.createElement('div'); pb.className='paused-badge'; pb.textContent='En pausa · Espacio para seguir'; pb.hidden=true;
+    el.addEventListener('timeupdate', ()=>{ if(el.duration){ sk.querySelector('i').style.width=(el.currentTime/el.duration*100)+'%'; sk.querySelector('.time').textContent=fmtDur(el.currentTime*1000)+' / '+fmtDur(el.duration*1000); } });
+    el.addEventListener('pause', ()=>pb.hidden=false); el.addEventListener('play', ()=>pb.hidden=true);
+    sk.onclick = e => { const r=sk.querySelector('.track').getBoundingClientRect(); if(el.duration) el.currentTime=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*el.duration; };
+    v.appendChild(sk); v.appendChild(pb);
+  } else {
+    el = document.createElement('img'); el.src=media(it); el.alt=it.name;
+    el.onerror = () => fail(it, it.mime==='image/heic' ? 'Las fotos HEIC no se ven en el navegador.' : 'No se pudo cargar esta foto.');
+  }
+  v.insertBefore(el, $('#interlude'));
+  const d = dec[it.id];
+  $('#rState').innerHTML = d ? `<span class="tag ${d}">${LABEL[d]}</span>` : '';
+  const rows = [['Álbum',it.album],['Carpeta',it.path.replace(/^\/storage\/emulated\/0\//,'').replace(/[^/]+$/,'')],['Archivo',it.name],['Fecha',fmtD(it.date)],
+    ['Tamaño',fmtB(it.size)+(it.w?` · ${it.w}×${it.h}`:'')],['Tipo',it.type==='video'?'Vídeo '+fmtDur(it.duration):'Foto '+(it.mime.split('/')[1]||'')]];
+  const dl=$('#meta'); dl.innerHTML='';
+  for (const [k,val] of rows){ const dt=document.createElement('dt'); dt.textContent=k; const dd=document.createElement('dd'); dd.textContent=val; dl.append(dt,dd); }
+  const left = items.slice(idx).filter(x=>x.album===it.album).length - 1;
+  $('#tAlbumLeft').textContent = left>0 ? `Quedan ${left} de este álbum en la tanda` : 'Último de este álbum en la tanda';
+  $('#mLabel').textContent = muted ? 'Activar sonido' : 'Silenciar';
+  tally(); preloadPhotos();
+}
+function fail(it, text){
+  stopVideo();
+  const v=$('#view'); v.querySelectorAll('img,.loading,.seek,.paused-badge').forEach(e=>e.remove());
+  const m=document.createElement('div'); m.className='msg';
+  m.innerHTML='<b></b><span></span>'; m.firstChild.textContent=text; m.lastChild.textContent=it.name+' · '+fmtB(it.size);
+  v.insertBefore(m, $('#interlude'));
+}
+function tally(){
+  const c=counts(items);
+  $('#tKeep').textContent=c.keep[0];
+  $('#tPc').textContent=c.pc[0]; $('#tPcGb').textContent=fmtB(c.pc[1]);
+  $('#tDel').textContent=c.delete[0]; $('#tDelGb').textContent=fmtB(c.delete[1]);
+}
+function flash(c){ const f=$('#flash'); f.className='flash '+c+' on'; requestAnimationFrame(()=>requestAnimationFrame(()=>f.className='flash '+c)); }
+
+/* avanzar: si cambia el álbum, pantalla de fin de álbum */
+function advance(fromAlbum){
+  while (idx<items.length && dec[items[idx].id]==='skip') idx++;
+  const next = items[idx];
+  if (!next || next.album!==fromAlbum) interlude = {album:fromAlbum, next: next ? next.album : null};
+  render();
+}
+function decide(d){
+  const it=items[idx]; if(!it) return;
+  history.push({ids:[it.id], prev:[dec[it.id]||null], idx});
+  dec[it.id]=d; flash({keep:'k',delete:'d',pc:'p'}[d]);
+  api('/api/decision',{ids:[it.id], d});
+  idx++; advance(it.album);
+}
+function skipAlbum(){
+  const it=items[idx]; if(!it) return;
+  const ids = items.slice(idx).filter(x=>x.album===it.album && !dec[x.id]).map(x=>x.id);
+  history.push({ids, prev:ids.map(()=>null), idx});
+  ids.forEach(i=>dec[i]='skip');
+  api('/api/decision',{ids, d:'skip'});
+  advance(it.album);
+}
+function undo(){
+  const h=history[history.length-1]; if(!h) return;
+  if (h.ids.some(id=>applyState[id] && applyState[id].apply && applyState[id].apply!=='error')) return;
+  history.pop();
+  h.ids.forEach((id,i)=>{ if(h.prev[i]) dec[id]=h.prev[i]; else delete dec[id]; });
+  const byPrev = {};
+  h.ids.forEach((id,i)=>{ const p=h.prev[i]||'__none'; (byPrev[p]=byPrev[p]||[]).push(id); });
+  for (const [p,ids] of Object.entries(byPrev)) api('/api/decision',{ids, d:p==='__none'?null:p});
+  idx=h.idx; interlude=null; if (view!=='review') show('review'); render();
+}
+
+function renderInterlude(){
+  stopVideo();
+  $('#view').querySelectorAll('img,.msg,.loading,.seek,.paused-badge').forEach(e=>e.remove());
+  const albumItems = items.filter(x=>x.album===interlude.album);
+  const c = counts(albumItems);
+  $('#rAlbum').textContent = interlude.album;
+  $('#iTitle').textContent = `Fin de “${interlude.album}”`;
+  $('#iCounts').innerHTML = `<span style="color:var(--del)">Borrar ${c.delete[0]} · ${fmtB(c.delete[1])}</span><span style="color:var(--pc)">PC ${c.pc[0]} · ${fmtB(c.pc[1])}</span><span style="color:var(--keep)">Conservar ${c.keep[0]}</span>${c.skip[0]?`<span style="color:var(--warn)">Saltados ${c.skip[0]}</span>`:''}`;
+  $('#iNext').innerHTML = interlude.next ? '<kbd>Enter</kbd> Seguir con ' : '<kbd>Enter</kbd> Repaso de la tanda';
+  if (interlude.next) $('#iNext').append(document.createTextNode('“'+interlude.next+'”'));
+  $('#rState').innerHTML=''; $('#meta').innerHTML=''; $('#tAlbumLeft').textContent='';
+  tally();
+}
+$('#iNext').onclick = () => { const i=interlude; interlude=null; if (i && i.next) render(); else openRecap(null); };
+$('#iRecap').onclick = () => openRecap(interlude.album);
+
+function openRecap(scope){
+  recapScope = scope; show('recap');
+  const c = counts(scope ? items.filter(x=>x.album===scope) : items);
+  if (c.delete[0]) recapTab='delete'; else if (c.pc[0]) recapTab='pc'; else recapTab='keep';
+  $('#recapGo').textContent = scope && interlude && interlude.next ? 'Seguir con “'+interlude.next+'”' : (idx<items.length ? 'Volver a la revisión' : 'Otra tanda');
+  $('#again').hidden = $('#recapGo').textContent === 'Otra tanda';
+  drawRecap();
+}
+function drawRecap(){
+  const list = recapScope ? items.filter(x=>x.album===recapScope) : items;
+  const c = counts(list);
+  $('#recapTitle').textContent = 'Repaso' + (recapScope ? ' de “'+recapScope+'”' : ' de la tanda');
+  document.querySelectorAll('.tab').forEach(t=>{
+    const k=t.dataset.t; t.setAttribute('aria-selected', k===recapTab);
+    t.textContent = `${LABEL[k]} · ${c[k][0]}` + (k!=='keep' ? ' · '+fmtB(c[k][1]) : '');
+  });
+  $('#recapHint').textContent = recapTab==='keep' ? 'Haz clic en una miniatura para pasarla a “Borrar”.' : 'Haz clic en una miniatura para pasarla a “Conservar”.';
+  const g=$('#grid'); g.innerHTML='';
+  drawApply(list);
+  const shown = list.filter(it=>dec[it.id]===recapTab);
+  if (!shown.length){ g.innerHTML='<p class="empty">Nada aquí.</p>'; return; }
+  for (const it of shown){
+    const b=document.createElement('button'); b.type='button'; b.className='tile '+recapTab; b.title=it.album+' · '+it.name;
+    if (it.type==='foto'){ const im=document.createElement('img'); im.loading='lazy'; im.src=media(it); im.alt=it.name; b.appendChild(im); }
+    else { const im=document.createElement('img'); im.alt=it.name; im.dataset.thumb=it.id; b.appendChild(im); thumbFor(it, im); }
+    const mt=document.createElement('span'); mt.className='meta'; mt.textContent=(it.type==='video'?'▶ '+fmtDur(it.duration)+' · ':'')+fmtB(it.size); b.appendChild(mt);
+    const x=document.createElement('span'); x.className='x'; x.textContent=LABEL[recapTab]; b.appendChild(x);
+    const st=applyState[it.id]; if (st && st.apply){ const s2=document.createElement('span'); s2.className='st'; s2.textContent= st.apply==='done' ? 'Movido · clic para devolver' : st.apply; if(st.apply==='done') b.classList.add('done'); if(st.error) b.title=st.error; b.appendChild(s2); }
+    b.onclick=async()=>{
+      const st=applyState[it.id];
+      if (st && st.apply==='done'){ const r=await api('/api/restore',{ids:[it.id]}); if(r.restored.length){ delete applyState[it.id]; delete dec[it.id]; } drawRecap(); return; }
+      if (st && st.apply && st.apply!=='error') return;
+      const to = recapTab==='keep' ? 'delete' : 'keep';
+      history.push({ids:[it.id], prev:[dec[it.id]], idx});
+      dec[it.id]=to; api('/api/decision',{ids:[it.id], d:to});
+      drawRecap();
+    };
+    g.appendChild(b);
+  }
+}
+let applyState={}, applyArmed=false, applyTimer=null;
+const BUSY=['en cola','copiando al PC','comprobando copia','moviendo en el móvil'];
+function pendingApply(list){ return list.filter(it=>(dec[it.id]==='delete'||dec[it.id]==='pc') && !(applyState[it.id] && (applyState[it.id].apply==='done' || BUSY.includes(applyState[it.id].apply)))); }
+function drawApply(list){
+  const pend=pendingApply(list), del=pend.filter(it=>dec[it.id]==='delete'), pc=pend.filter(it=>dec[it.id]==='pc');
+  const bytes=pend.reduce((s,it)=>s+it.size,0);
+  const done=list.filter(it=>applyState[it.id]&&applyState[it.id].apply==='done');
+  const errs=list.filter(it=>applyState[it.id]&&applyState[it.id].apply==='error');
+  const busy=list.filter(it=>applyState[it.id]&&BUSY.includes(applyState[it.id].apply));
+  $('#applyTitle').textContent = busy.length ? `Moviendo… ${done.length} de ${done.length+busy.length}` : (done.length ? `Movidos ${done.length} · ${fmtB(done.reduce((s,it)=>s+it.size,0))}, listos para que los borres tú` : 'Mover a las carpetas de revisión del móvil');
+  let txt = applyArmed
+    ? `Se moverán ${del.length} a Criba_para_borrar y ${pc.length} a Criba_ya_en_PC (estos después de comprobar su copia en el PC). No se borra nada. Pulsa otra vez para confirmar.`
+    : (pend.length ? `${del.length} para borrar y ${pc.length} para guardar en el PC · ${fmtB(bytes)}.` : 'No queda nada pendiente de mover en este repaso.');
+  if (errs.length) txt += ` ${errs.length} con error (pasa el ratón por encima para ver el motivo); puedes volver a intentarlo.`;
+  $('#applyText').textContent = txt;
+  const btn=$('#applyBtn'); btn.hidden = !pend.length || busy.length>0;
+  btn.textContent = applyArmed ? `Confirmar: mover ${pend.length} (${fmtB(bytes)})` : `Mover ${pend.length} a carpetas de revisión`;
+  $('#applyCancel').hidden = !applyArmed;
+  $('#applyProg').textContent = busy.length ? applyState[busy[0].id].apply+'…' : '';
+}
+$('#applyBtn').onclick = async () => {
+  const list = recapScope ? items.filter(x=>x.album===recapScope) : items;
+  if (!applyArmed){ applyArmed=true; drawRecap(); return; }
+  applyArmed=false;
+  const ids = pendingApply(list).map(it=>it.id);
+  const r = await api('/api/apply',{ids});
+  r.queued.forEach(id=>applyState[id]={apply:'en cola'});
+  drawRecap(); pollApply();
+};
+$('#applyCancel').onclick = () => { applyArmed=false; drawRecap(); };
+let polling=false;
+async function pollApply(){
+  if (polling) return; polling=true;
+  clearTimeout(applyTimer);
+  let busy=false;
+  try {
+    const ids = items.filter(it=>applyState[it.id]).map(it=>it.id);
+    if (!ids.length) return;
+    const r = await api('/api/apply-status',{ids}, 5000);
+    let changed=false;
+    for (const [id,st] of Object.entries(r.items)){
+      const prev=applyState[id];
+      if (!prev || prev.apply!==st.apply || prev.error!==st.error) changed=true;
+      applyState[id]=st; if (BUSY.includes(st.apply)) busy=true;
+    }
+    if (view==='recap' && changed) drawRecap();   // solo redibuja si algo cambió
+  } catch(e){ busy=true; }            // si una consulta falla o tarda, se reintenta
+  finally {
+    polling=false;
+    if (busy) applyTimer=setTimeout(pollApply, 1000);
+  }
+}
+// vigilante: aunque algo falle, cada 4 s se comprueba si queda algo moviéndose
+setInterval(()=>{ if (view==='recap' && Object.values(applyState).some(s=>BUSY.includes(s.apply))) pollApply(); }, 4000);
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{ recapTab=t.dataset.t; drawRecap(); });
+$('#recapGo').onclick=()=>{
+  if (recapScope && interlude && interlude.next){ interlude=null; show('review'); render(); }
+  else if (idx<items.length){ interlude=null; show('review'); render(); }
+  else { show('start'); loadAlbums(); }
+};
+$('#again').onclick=()=>{ show('start'); loadAlbums(); };
+
+/* teclado: siempre activo en la revisión, aunque hayas hecho clic en el vídeo */
+document.querySelectorAll('.keys .key').forEach(b=>b.onclick=()=>{ b.blur(); key(b.dataset.k); });
+window.addEventListener('keydown', e=>{
+  if (e.ctrlKey||e.metaKey||e.altKey) return;
+  const k=e.key.toLowerCase();
+  if (view==='recap' && k==='z'){ e.preventDefault(); undo(); return; }
+  if (view!=='review') return;
+  if (interlude){
+    if (k==='enter'||k===' '){ e.preventDefault(); $('#iNext').click(); }
+    else if (k==='r'){ e.preventDefault(); $('#iRecap').click(); }
+    else if (k==='z'){ e.preventDefault(); undo(); }
+    return;
+  }
+  if (['n','s','p','a','z',' ','m','escape','arrowleft','arrowright'].includes(k)){ e.preventDefault(); e.stopPropagation(); key(k); }
+}, true);
+document.addEventListener('click', e=>{ if (view==='review' && e.target.tagName==='VIDEO') e.target.blur(); }, true);
+function key(k){
+  const vid=$('#view video');
+  if (k==='n') decide('delete');
+  else if (k==='s') decide('keep');
+  else if (k==='p') decide('pc');
+  else if (k==='a') skipAlbum();
+  else if (k==='z') undo();
+  else if (k===' ' && vid) vid.paused ? vid.play() : vid.pause();
+  else if (k==='m'){ muted=!muted; try{localStorage.setItem('criba-muted',muted?'1':'0')}catch(e){} if(vid) vid.muted=muted; $('#mLabel').textContent=muted?'Activar sonido':'Silenciar'; }
+  else if (k==='escape') openRecap(null);
+  else if ((k==='arrowleft'||k==='arrowright') && vid) vid.currentTime=Math.max(0, vid.currentTime+(k==='arrowright'?5:-5));
+}
+setInterval(async()=>{
+  if (view!=='review') return;
+  try { const s=await api('/api/status'); $('#cache').textContent=`Caché: ${s.ready_ahead}/${s.window} siguientes listos · ${String(s.cache_gb).replace('.',',')} GB`; } catch(e){}
+}, 2000);
+loadAlbums(); setMode('pesados');
+</script>
+</body>
+</html>

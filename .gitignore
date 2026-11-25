@@ -1,0 +1,8 @@
+# Datos de cada usuario: nunca se suben
+criba/inventario.json
+criba/decisiones*.json
+criba/registro*.jsonl
+criba/cache/
+criba/*.tmp
+__pycache__/
+platform-tools/
