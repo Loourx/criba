@@ -302,8 +302,19 @@ class CribaViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.RECAP
     }
 
+    /** El repaso es el final de la tanda (no un repaso de álbum a mitad). */
+    fun recapEndsBatch(): Boolean =
+        recapSource == RecapSource.BATCH && !(recapAlbum != null && interlude?.next != null) && index >= batch.size
+
+    /** Al final de la tanda no se puede terminar con cosas decididas sin mover. */
+    fun mustMoveBeforeFinishing(): Boolean = recapEndsBatch() && pendingToApply().isNotEmpty()
+
     fun leaveRecap() {
         if (running) return
+        if (mustMoveBeforeFinishing()) {
+            message = "Antes de terminar, mueve lo decidido con el botón “Mover”. Si quieres conservar algo, tócalo en el repaso."
+            return
+        }
         when {
             recapSource != RecapSource.BATCH -> backToStart()
             recapAlbum != null && interlude?.next != null -> { interlude = null; screen = Screen.REVIEW }

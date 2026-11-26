@@ -507,8 +507,13 @@ private fun RecapScreen(vm: CribaViewModel) {
                 errs.take(3).forEach { Text(it, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
+        val blocked = vm.mustMoveBeforeFinishing()
+        if (blocked) {
+            Text("Para terminar la tanda, mueve primero lo decidido. Así no queda nada a medias.",
+                color = Warn, fontSize = 12.sp)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { vm.leaveRecap() }, enabled = progress?.running != true, modifier = Modifier.weight(1f)) {
+            Button(onClick = { vm.leaveRecap() }, enabled = progress?.running != true && !blocked, modifier = Modifier.weight(1f)) {
                 Text(when {
                     vm.recapSource != RecapSource.BATCH -> "Volver al inicio"
                     vm.recapAlbum != null && vm.interlude?.next != null -> "Seguir con “${vm.interlude?.next}”"
